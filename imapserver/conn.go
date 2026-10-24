@@ -255,6 +255,8 @@ func (c *Conn) readCommand(dec *imapwire.Decoder) error {
 		err = c.handleLSub(dec)
 	case "NAMESPACE":
 		err = c.handleNamespace(dec)
+	case "XAPPLEPUSHSERVICE":
+		err = c.handleApplePush(dec)
 	case "IDLE":
 		err = c.handleIdle(dec)
 	case "SELECT", "EXAMINE":
