@@ -3,7 +3,8 @@ package imap
 // SelectOptions contains options for the SELECT or EXAMINE command.
 type SelectOptions struct {
 	ReadOnly  bool
-	CondStore bool // requires CONDSTORE
+	CondStore bool                  // requires CONDSTORE
+	QResync   *SelectQResyncOptions // requires ENABLE QRESYNC
 }
 
 // SelectData is the data returned by a SELECT command.
@@ -27,5 +28,23 @@ type SelectData struct {
 
 	List *ListData // requires IMAP4rev2
 
-	HighestModSeq uint64 // requires CONDSTORE
+	HighestModSeq uint64          // requires CONDSTORE
+	Vanished      UIDSet          // QRESYNC, EARLIER
+	Changed       []SelectMessage // QRESYNC
+}
+
+// SelectQResyncOptions identifies the client's cached mailbox state.
+// Sequence match data is an optional optimization; servers may ignore it.
+type SelectQResyncOptions struct {
+	UIDValidity uint32
+	ModSeq      uint64
+	KnownUIDs   UIDSet
+}
+
+// SelectMessage is a changed message returned during quick resynchronization.
+type SelectMessage struct {
+	Seq    uint32
+	UID    UID
+	Flags  []Flag
+	ModSeq uint64
 }

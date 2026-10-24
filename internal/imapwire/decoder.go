@@ -366,7 +366,7 @@ func (dec *Decoder) ModSeq(ptr *uint64) bool {
 	if !ok {
 		return false
 	}
-	v, err := strconv.ParseUint(s, 10, 64)
+	v, err := strconv.ParseUint(s, 10, 63)
 	if err != nil {
 		return false // can happen on overflow
 	}

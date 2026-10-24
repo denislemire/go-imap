@@ -26,11 +26,23 @@ func (c *Conn) handleEnable(dec *imapwire.Decoder) error {
 	var enabled []imap.Cap
 	for _, req := range requested {
 		switch req {
+		case imap.CapCondStore, imap.CapQResync:
+			if c.server.options.caps().Has(req) {
+				enabled = append(enabled, req)
+			}
 		case imap.CapIMAP4rev2, imap.CapUTF8Accept:
 			enabled = append(enabled, req)
 		}
 	}
 
+	for _, cap := range enabled {
+		if cap == imap.CapCondStore || cap == imap.CapQResync {
+			if err := c.useCondStore(); err != nil {
+				return err
+			}
+			break
+		}
+	}
 	c.mutex.Lock()
 	for _, e := range enabled {
 		c.enabled[e] = struct{}{}

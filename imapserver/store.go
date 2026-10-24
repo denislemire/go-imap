@@ -13,7 +13,21 @@ func (c *Conn) handleStore(dec *imapwire.Decoder, numKind NumKind) error {
 		numSet imap.NumSet
 		item   string
 	)
-	if !dec.ExpectSP() || !dec.ExpectNumSet(numKind.wire(), &numSet) || !dec.ExpectSP() || !dec.ExpectAtom(&item) || !dec.ExpectSP() {
+	if !dec.ExpectSP() || !dec.ExpectNumSet(numKind.wire(), &numSet) || !dec.ExpectSP() {
+		return dec.Err()
+	}
+	options := imap.StoreOptions{}
+	if dec.Special('(') {
+		var name string
+		if !dec.ExpectAtom(&name) || !strings.EqualFold(name, "UNCHANGEDSINCE") || !dec.ExpectSP() || !dec.ExpectModSeq(&options.UnchangedSince) || !dec.ExpectSpecial(')') || !dec.ExpectSP() {
+			return newClientBugError("Invalid STORE modifier")
+		}
+		options.UnchangedSinceSet = true
+		if err := c.useCondStore(); err != nil {
+			return err
+		}
+	}
+	if !dec.ExpectAtom(&item) || !dec.ExpectSP() {
 		return dec.Err()
 	}
 	var flags []imap.Flag
@@ -69,7 +83,6 @@ func (c *Conn) handleStore(dec *imapwire.Decoder, numKind NumKind) error {
 	}
 
 	w := &FetchWriter{conn: c}
-	options := imap.StoreOptions{}
 	return c.session.Store(w, numSet, &imap.StoreFlags{
 		Op:     op,
 		Silent: silent,

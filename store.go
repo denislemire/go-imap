@@ -2,7 +2,8 @@ package imap
 
 // StoreOptions contains options for the STORE command.
 type StoreOptions struct {
-	UnchangedSince uint64 // requires CONDSTORE
+	UnchangedSince    uint64 // requires CONDSTORE
+	UnchangedSinceSet bool   // distinguishes UNCHANGEDSINCE 0
 }
 
 // StoreFlagsOp is a flag operation: set, add or delete.
