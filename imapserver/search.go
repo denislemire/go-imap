@@ -75,6 +75,8 @@ func (c *Conn) handleSearch(tag string, dec *imapwire.Decoder, numKind NumKind) 
 		return err
 	}
 
+	c.searchUsesSeq = searchHasSeq(&criteria)
+
 	// If no return option is specified, ALL is assumed
 	if !options.ReturnMin && !options.ReturnMax && !options.ReturnAll && !options.ReturnCount {
 		options.ReturnAll = true
@@ -393,6 +395,23 @@ func searchHasModSeq(c *imap.SearchCriteria) bool {
 	}
 	for i := range c.Or {
 		if searchHasModSeq(&c.Or[i][0]) || searchHasModSeq(&c.Or[i][1]) {
+			return true
+		}
+	}
+	return false
+}
+
+func searchHasSeq(c *imap.SearchCriteria) bool {
+	if len(c.SeqNum) > 0 {
+		return true
+	}
+	for i := range c.Not {
+		if searchHasSeq(&c.Not[i]) {
+			return true
+		}
+	}
+	for i := range c.Or {
+		if searchHasSeq(&c.Or[i][0]) || searchHasSeq(&c.Or[i][1]) {
 			return true
 		}
 	}
