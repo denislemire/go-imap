@@ -65,11 +65,15 @@ func (t *MailboxTracker) queueUpdate(update *trackerUpdate, source *SessionTrack
 }
 
 // QueueExpunge queues a new EXPUNGE update.
-func (t *MailboxTracker) QueueExpunge(seqNum uint32) {
+func (t *MailboxTracker) QueueExpunge(seqNum uint32) { t.QueueExpungeUID(seqNum, 0) }
+func (t *MailboxTracker) QueueExpungeUID(seqNum uint32, uid imap.UID) {
+	t.QueueExpungeUIDModSeq(seqNum, uid, 0)
+}
+func (t *MailboxTracker) QueueExpungeUIDModSeq(seqNum uint32, uid imap.UID, modSeq uint64) {
 	if seqNum == 0 {
 		panic("imapserver: invalid expunge message sequence number")
 	}
-	t.queueUpdate(&trackerUpdate{expunge: seqNum}, nil)
+	t.queueUpdate(&trackerUpdate{expunge: seqNum, expungeUID: uid, expungeModSeq: modSeq}, nil)
 }
 
 // QueueNumMessages queues a new EXISTS update.
@@ -90,23 +94,30 @@ func (t *MailboxTracker) QueueMailboxFlags(flags []imap.Flag) {
 //
 // If source is not nil, the update won't be dispatched to it.
 func (t *MailboxTracker) QueueMessageFlags(seqNum uint32, uid imap.UID, flags []imap.Flag, source *SessionTracker) {
+	t.QueueMessageFlagsModSeq(seqNum, uid, flags, 0, source)
+}
+func (t *MailboxTracker) QueueMessageFlagsModSeq(seqNum uint32, uid imap.UID, flags []imap.Flag, modSeq uint64, source *SessionTracker) {
 	t.queueUpdate(&trackerUpdate{fetch: &trackerUpdateFetch{
 		seqNum: seqNum,
 		uid:    uid,
 		flags:  flags,
+		modSeq: modSeq,
 	}}, source)
 }
 
 type trackerUpdate struct {
-	expunge      uint32
-	numMessages  uint32
-	mailboxFlags []imap.Flag
-	fetch        *trackerUpdateFetch
+	expungeModSeq uint64
+	expungeUID    imap.UID
+	expunge       uint32
+	numMessages   uint32
+	mailboxFlags  []imap.Flag
+	fetch         *trackerUpdateFetch
 }
 
 type trackerUpdateFetch struct {
 	seqNum uint32
 	uid    imap.UID
+	modSeq uint64
 	flags  []imap.Flag
 }
 
@@ -172,13 +183,13 @@ func (t *SessionTracker) Poll(w *UpdateWriter, allowExpunge bool) error {
 		var err error
 		switch {
 		case update.expunge != 0:
-			err = w.WriteExpunge(update.expunge)
+			err = w.WriteExpungeUID(update.expunge, update.expungeUID)
 		case update.numMessages != 0:
 			err = w.WriteNumMessages(update.numMessages)
 		case update.mailboxFlags != nil:
 			err = w.WriteMailboxFlags(update.mailboxFlags)
 		case update.fetch != nil:
-			err = w.WriteMessageFlags(update.fetch.seqNum, update.fetch.uid, update.fetch.flags)
+			err = w.WriteMessageFlagsModSeq(update.fetch.seqNum, update.fetch.uid, update.fetch.flags, update.fetch.modSeq)
 		default:
 			panic(fmt.Errorf("imapserver: unknown tracker update %#v", update))
 		}
@@ -281,4 +292,17 @@ func (t *SessionTracker) EncodeSeqNum(seqNum uint32) uint32 {
 		}
 	}
 	return seqNum
+}
+
+// PendingExpungeLimit prevents clients advancing beyond a deferred deletion.
+func (t *SessionTracker) PendingExpungeLimit() uint64 {
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
+	var limit uint64
+	for _, u := range t.queue {
+		if u.expungeModSeq > 0 && (limit == 0 || u.expungeModSeq-1 < limit) {
+			limit = u.expungeModSeq - 1
+		}
+	}
+	return limit
 }

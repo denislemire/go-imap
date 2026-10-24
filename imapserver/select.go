@@ -9,10 +9,21 @@ import (
 
 func (c *Conn) handleSelect(tag string, dec *imapwire.Decoder, readOnly bool) error {
 	var mailbox string
-	if !dec.ExpectSP() || !dec.ExpectMailbox(&mailbox) || !dec.ExpectCRLF() {
+	if !dec.ExpectSP() || !dec.ExpectMailbox(&mailbox) {
 		return dec.Err()
 	}
 
+	options := imap.SelectOptions{ReadOnly: readOnly}
+	oldState := c.state
+	c.state = imap.ConnStateAuthenticated
+	parseErr := c.readSelectSync(dec, &options)
+	c.state = oldState
+	if parseErr != nil {
+		return parseErr
+	}
+	if !dec.ExpectCRLF() {
+		return dec.Err()
+	}
 	if err := c.checkState(imap.ConnStateAuthenticated); err != nil {
 		return err
 	}
@@ -32,7 +43,6 @@ func (c *Conn) handleSelect(tag string, dec *imapwire.Decoder, readOnly bool) er
 		}
 	}
 
-	options := imap.SelectOptions{ReadOnly: readOnly}
 	data, err := c.session.Select(mailbox, &options)
 	if err != nil {
 		return err
@@ -62,6 +72,25 @@ func (c *Conn) handleSelect(tag string, dec *imapwire.Decoder, readOnly bool) er
 	}
 	if err := c.writePermanentFlags(data.PermanentFlags); err != nil {
 		return err
+	}
+	if c.enabled.Has(imap.CapCondStore) {
+		if err := c.writeHighestModSeq(data.HighestModSeq); err != nil {
+			return err
+		}
+	}
+	if len(data.Vanished) > 0 {
+		if err := c.writeVanished(data.Vanished, true); err != nil {
+			return err
+		}
+	}
+	for _, m := range data.Changed {
+		w := (&FetchWriter{conn: c}).CreateMessage(m.Seq)
+		w.WriteUID(m.UID)
+		w.WriteFlags(m.Flags)
+		w.WriteModSeq(m.ModSeq)
+		if err := w.Close(); err != nil {
+			return err
+		}
 	}
 	if data.List != nil {
 		if err := c.writeList(data.List); err != nil {

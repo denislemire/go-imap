@@ -301,6 +301,11 @@ func (c *Conn) readCommand(dec *imapwire.Decoder) error {
 	)
 	if errors.As(err, &imapErr) {
 		resp = (*imap.StatusResponse)(imapErr)
+		if resp.Type == imap.StatusResponseTypeOK {
+			if pollErr := c.poll(name); pollErr != nil {
+				return pollErr
+			}
+		}
 	} else if errors.As(err, &decErr) {
 		resp = &imap.StatusResponse{
 			Type: imap.StatusResponseTypeBad,
@@ -320,6 +325,23 @@ func (c *Conn) readCommand(dec *imapwire.Decoder) error {
 		resp = &imap.StatusResponse{
 			Type: imap.StatusResponseTypeOK,
 			Text: fmt.Sprintf("%v completed", name),
+		}
+	}
+
+	if resp.Type == imap.StatusResponseTypeOK && c.enabled.Has(imap.CapQResync) && c.state == imap.ConnStateSelected {
+		if s, ok := c.session.(interface {
+			HighestModSeq() uint64
+			PendingExpungeLimit() uint64
+		}); ok {
+			if limit := s.PendingExpungeLimit(); limit != 0 {
+				if err := c.writeHighestModSeq(limit); err != nil {
+					return err
+				}
+			} else if name == "EXPUNGE" || name == "UID EXPUNGE" {
+				if exp, ok := c.session.(interface{ ExpungeModSeq() uint64 }); ok {
+					resp.Code = imap.ResponseCode(fmt.Sprintf("HIGHESTMODSEQ %d", exp.ExpungeModSeq()))
+				}
+			}
 		}
 	}
 	return c.writeStatusResp(tag, resp)
@@ -583,9 +605,13 @@ type UpdateWriter struct {
 }
 
 // WriteExpunge writes an EXPUNGE response.
-func (w *UpdateWriter) WriteExpunge(seqNum uint32) error {
+func (w *UpdateWriter) WriteExpunge(seqNum uint32) error { return w.WriteExpungeUID(seqNum, 0) }
+func (w *UpdateWriter) WriteExpungeUID(seqNum uint32, uid imap.UID) error {
 	if !w.allowExpunge {
 		return fmt.Errorf("imapserver: EXPUNGE updates are not allowed in this context")
+	}
+	if uid != 0 && w.conn.enabled.Has(imap.CapQResync) {
+		return w.conn.writeVanished(imap.UIDSetNum(uid), false)
 	}
 	return w.conn.writeExpunge(seqNum)
 }
@@ -610,11 +636,17 @@ func (w *UpdateWriter) WriteMailboxFlags(flags []imap.Flag) error {
 
 // WriteMessageFlags writes a FETCH response with FLAGS.
 func (w *UpdateWriter) WriteMessageFlags(seqNum uint32, uid imap.UID, flags []imap.Flag) error {
+	return w.WriteMessageFlagsModSeq(seqNum, uid, flags, 0)
+}
+func (w *UpdateWriter) WriteMessageFlagsModSeq(seqNum uint32, uid imap.UID, flags []imap.Flag, modSeq uint64) error {
 	fetchWriter := &FetchWriter{conn: w.conn}
 	respWriter := fetchWriter.CreateMessage(seqNum)
 	if uid != 0 {
 		respWriter.WriteUID(uid)
 	}
 	respWriter.WriteFlags(flags)
+	if modSeq != 0 && w.conn.enabled.Has(imap.CapCondStore) {
+		respWriter.WriteModSeq(modSeq)
+	}
 	return respWriter.Close()
 }

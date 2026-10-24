@@ -92,6 +92,8 @@ func (c *Conn) availableCaps() []imap.Cap {
 		// Capabilities which require backend support and apply to both
 		// IMAP4rev1 and IMAP4rev2
 		addAvailableCaps(&caps, available, []imap.Cap{
+			imap.CapCondStore,
+			imap.CapQResync,
 			imap.CapSpecialUse,
 			imap.CapCreateSpecialUse,
 			imap.CapLiteralPlus,

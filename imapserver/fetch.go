@@ -75,6 +75,48 @@ func (c *Conn) handleFetch(dec *imapwire.Decoder, numKind NumKind) error {
 		}
 	}
 
+	if dec.SP() {
+		err := dec.ExpectList(func() error {
+			var name string
+			if !dec.ExpectAtom(&name) {
+				return dec.Err()
+			}
+			switch strings.ToUpper(name) {
+			case "CHANGEDSINCE":
+				if options.ChangedSinceSet {
+					return newClientBugError("Duplicate CHANGEDSINCE")
+				}
+				if !dec.ExpectSP() || !dec.ExpectModSeq(&options.ChangedSince) {
+					return dec.Err()
+				}
+				options.ChangedSinceSet = true
+				options.ModSeq = true
+				return c.useCondStore()
+			case "VANISHED":
+				if numKind != NumKindUID || !c.enabled.Has(imap.CapQResync) {
+					return newClientBugError("VANISHED requires UID FETCH and ENABLE QRESYNC")
+				}
+				options.Vanished = true
+				return nil
+			default:
+				return newClientBugError("Unknown FETCH modifier")
+			}
+		})
+		if err != nil {
+			return err
+		}
+	}
+	if options.Vanished && !options.ChangedSinceSet {
+		return newClientBugError("VANISHED requires CHANGEDSINCE")
+	}
+	if options.ModSeq {
+		if err := c.useCondStore(); err != nil {
+			return err
+		}
+	}
+	if c.enabled.Has(imap.CapCondStore) && options.Flags {
+		options.ModSeq = true
+	}
 	if !dec.ExpectCRLF() {
 		return dec.Err()
 	}
@@ -106,6 +148,8 @@ func handleFetchAtt(dec *imapwire.Decoder, attName string, options *imap.FetchOp
 		options.InternalDate = true
 	case "RFC822.SIZE":
 		options.RFC822Size = true
+	case "MODSEQ":
+		options.ModSeq = true
 	case "UID":
 		options.UID = true
 	case "RFC822": // equivalent to BODY[]

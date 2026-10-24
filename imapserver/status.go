@@ -40,6 +40,11 @@ func (c *Conn) handleStatus(dec *imapwire.Decoder) error {
 		return err
 	}
 
+	if options.HighestModSeq {
+		if err := c.useCondStore(); err != nil {
+			return err
+		}
+	}
 	data, err := c.session.Status(mailbox, &options)
 	if err != nil {
 		return err
@@ -83,6 +88,9 @@ func (c *Conn) writeStatus(data *imap.StatusData, options *imap.StatusOptions) e
 	if options.DeletedStorage {
 		listEnc.Item().Atom("DELETED-STORAGE").SP().Number64(*data.DeletedStorage)
 	}
+	if options.HighestModSeq {
+		listEnc.Item().Atom("HIGHESTMODSEQ").SP().ModSeq(data.HighestModSeq)
+	}
 	if options.NumRecent {
 		listEnc.Item().Atom("RECENT").SP().Number(*data.NumRecent)
 	}
@@ -97,6 +105,8 @@ func readStatusItem(dec *imapwire.Decoder, options *imap.StatusOptions) error {
 		return dec.Err()
 	}
 	switch strings.ToUpper(name) {
+	case "HIGHESTMODSEQ":
+		options.HighestModSeq = true
 	case "MESSAGES":
 		options.NumMessages = true
 	case "UIDNEXT":

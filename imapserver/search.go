@@ -80,6 +80,11 @@ func (c *Conn) handleSearch(tag string, dec *imapwire.Decoder, numKind NumKind) 
 		options.ReturnAll = true
 	}
 
+	if searchHasModSeq(&criteria) {
+		if err := c.useCondStore(); err != nil {
+			return err
+		}
+	}
 	data, err := c.session.Search(numKind, &criteria, &options)
 	if err != nil {
 		return err
@@ -88,7 +93,7 @@ func (c *Conn) handleSearch(tag string, dec *imapwire.Decoder, numKind NumKind) 
 	if c.enabled.Has(imap.CapIMAP4rev2) || extended {
 		return c.writeESearch(tag, data, &options, numKind)
 	} else {
-		return c.writeSearch(data.All)
+		return c.writeSearchModSeq(data.All, data.ModSeq)
 	}
 }
 
@@ -114,6 +119,9 @@ func (c *Conn) writeESearch(tag string, data *imap.SearchData, options *imap.Sea
 	if options.ReturnMax && data.Max > 0 {
 		enc.SP().Atom("MAX").SP().Number(data.Max)
 	}
+	if data.ModSeq != 0 {
+		enc.SP().Atom("MODSEQ").SP().ModSeq(data.ModSeq)
+	}
 	if options.ReturnCount {
 		enc.SP().Atom("COUNT").SP().Number(data.Count)
 	}
@@ -131,7 +139,8 @@ func isNumSetEmpty(numSet imap.NumSet) bool {
 	}
 }
 
-func (c *Conn) writeSearch(numSet imap.NumSet) error {
+func (c *Conn) writeSearch(numSet imap.NumSet) error { return c.writeSearchModSeq(numSet, 0) }
+func (c *Conn) writeSearchModSeq(numSet imap.NumSet, modSeq uint64) error {
 	enc := newResponseEncoder(c)
 	defer enc.end()
 
@@ -153,6 +162,9 @@ func (c *Conn) writeSearch(numSet imap.NumSet) error {
 	}
 	if !ok {
 		return fmt.Errorf("imapserver: failed to enumerate message numbers in SEARCH response")
+	}
+	if modSeq != 0 {
+		enc.SP().Special('(').Atom("MODSEQ").SP().ModSeq(modSeq).Special(')')
 	}
 	return enc.CRLF()
 }
@@ -221,6 +233,30 @@ func readSearchKeyWithAtom(criteria *imap.SearchCriteria, dec *imapwire.Decoder,
 		criteria.NotFlag = append(criteria.NotFlag, imap.FlagSeen)
 	case "OLD":
 		criteria.NotFlag = append(criteria.NotFlag, internal.FlagRecent)
+	case "MODSEQ":
+		m := &imap.SearchCriteriaModSeq{}
+		if !dec.ExpectSP() {
+			return dec.Err()
+		}
+		if !dec.ModSeq(&m.ModSeq) {
+			if !dec.ExpectAString(&m.MetadataName) || !dec.ExpectSP() {
+				return dec.Err()
+			}
+			var typ string
+			if !dec.ExpectAtom(&typ) || !dec.ExpectSP() || !dec.ExpectModSeq(&m.ModSeq) {
+				return dec.Err()
+			}
+			switch strings.ToLower(typ) {
+			case "all", "priv", "shared":
+				m.MetadataType = imap.SearchCriteriaMetadataType(strings.ToLower(typ))
+			default:
+				return newClientBugError("Invalid MODSEQ entry type")
+			}
+		}
+		if criteria.ModSeq == nil || criteria.ModSeq.ModSeq < m.ModSeq {
+			criteria.ModSeq = m
+		}
+
 	case "KEYWORD", "UNKEYWORD":
 		if !dec.ExpectSP() {
 			return dec.Err()
@@ -340,4 +376,21 @@ func readSearchKeyWithAtom(criteria *imap.SearchCriteria, dec *imapwire.Decoder,
 
 func searchKeyFlag(key string) imap.Flag {
 	return imap.Flag("\\" + strings.Title(strings.ToLower(key)))
+}
+
+func searchHasModSeq(c *imap.SearchCriteria) bool {
+	if c.ModSeq != nil {
+		return true
+	}
+	for i := range c.Not {
+		if searchHasModSeq(&c.Not[i]) {
+			return true
+		}
+	}
+	for i := range c.Or {
+		if searchHasModSeq(&c.Or[i][0]) || searchHasModSeq(&c.Or[i][1]) {
+			return true
+		}
+	}
+	return false
 }
