@@ -60,6 +60,9 @@ func (c *Conn) availableCaps() []imap.Cap {
 		caps = append(caps, imap.CapLoginDisabled)
 	}
 	if c.state == imap.ConnStateAuthenticated || c.state == imap.ConnStateSelected {
+		if session, ok := c.session.(SessionApplePush); ok && session.ApplePushTopic() != "" {
+			caps = append(caps, imap.Cap("XAPPLEPUSHSERVICE"))
+		}
 		if available.Has(imap.CapIMAP4rev1) {
 			// IMAP4rev1-specific capabilities that don't require backend
 			// support and are not applicable to IMAP4rev2
