@@ -40,9 +40,10 @@ type Conn struct {
 	bw       *bufio.Writer
 	encMutex sync.Mutex
 
-	mutex   sync.Mutex
-	conn    net.Conn
-	enabled imap.CapSet
+	mutex         sync.Mutex
+	conn          net.Conn
+	enabled       imap.CapSet
+	searchUsesSeq bool
 
 	state   imap.ConnState
 	session Session
@@ -216,6 +217,7 @@ func (c *Conn) readCommand(dec *imapwire.Decoder) error {
 
 	// TODO: handle multiple commands concurrently
 	sendOK := true
+	c.searchUsesSeq = false
 	var err error
 	switch name {
 	case "NOOP", "CHECK":
@@ -503,7 +505,7 @@ func (c *Conn) poll(cmd string) error {
 		return nil
 	}
 
-	allowExpunge := true
+	allowExpunge := !(cmd == "UID SEARCH" && c.searchUsesSeq)
 	switch cmd {
 	case "FETCH", "STORE", "SEARCH":
 		allowExpunge = false
